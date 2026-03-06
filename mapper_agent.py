@@ -82,7 +82,7 @@ def compare_regulation_with_profile(regulation_text, company_profile):
 
     # Use AI for detailed comparison
     response = groq_client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
+        model="llama-3.1-8b-instant",
         messages=[{
             "role": "user",
             "content": f"""You are an RBI compliance expert. Compare this new RBI regulation with the company's profile and determine the compliance impact.

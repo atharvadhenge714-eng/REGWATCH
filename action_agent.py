@@ -26,7 +26,7 @@ def generate_action_plan(parsed_circular, affected_policies):
         policies_text = str(affected_policies)
 
     response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
+        model="llama-3.1-8b-instant",
         messages=[{
             "role": "user",
             "content": f"""You are the Chief Compliance Officer at an Indian fintech/NBFC company. A new RBI regulation has been issued and you must create an ACTIONABLE compliance response.
@@ -73,15 +73,11 @@ For each affected policy, draft the specific amendments:
 
 ## 🎫 AUTO-GENERATED COMPLIANCE TASKS
 
-Create JIRA-style tickets:
+| Ticket ID | Task Title | Assignee (Team) | Sprint | Story Points | Acceptance Criteria |
+|-----------|-----------|-----------------|--------|-------------|---------------------|
+| REG-001 | [task] | [team] | Current/Next | [1-8] | [criteria] |
 
-**Ticket 1**: [POLICY-ID] — [Task Title]
-- **Assignee**: [Team]
-- **Sprint**: Current / Next
-- **Story Points**: [1-8]
-- **Acceptance Criteria**: [specific criteria]
-
-Create 4-5 tickets.
+Create 4-5 tickets in this table.
 
 ---
 
@@ -148,6 +144,65 @@ Be specific and practical."""
     )
 
     return response.choices[0].message.content
+
+
+def generate_quick_scan(circulars, company_profile):
+    """Quick scan all circulars to identify which ones are relevant to the company."""
+    print("🔍 Quick scanning all circulars for relevance...")
+
+    circulars_text = "\n".join(
+        f"{i+1}. [{c.get('date', '')}] {c['title']} — {c.get('summary', '')}"
+        for i, c in enumerate(circulars)
+    )
+
+    response = client.chat.completions.create(
+        model="llama-3.1-8b-instant",
+        messages=[{
+            "role": "user",
+            "content": f"""You are an RBI compliance expert. A company needs to know which of these recent RBI circulars are relevant to them.
+
+Company: {company_profile.get('company_name', 'Unknown')}
+Type: {company_profile.get('company_type', 'Fintech')}
+Services: {', '.join(company_profile.get('services', []))}
+Regulatory Domains: {', '.join(company_profile.get('regulatory_domains', []))}
+
+Recent RBI Circulars:
+{circulars_text}
+
+Return ONLY a valid JSON array (no markdown, no extra text). For each circular, return:
+[
+    {{
+        "circular_index": 0,
+        "title": "circular title",
+        "is_relevant": true/false,
+        "relevance_reason": "why it matters or doesn't to this company",
+        "impact_level": "High / Medium / Low / Not Applicable",
+        "urgency": "Immediate / This Quarter / Informational"
+    }}
+]
+
+Return the JSON array ONLY."""
+        }],
+        temperature=0.3
+    )
+
+    result_text = response.choices[0].message.content.strip()
+
+    if "```json" in result_text:
+        result_text = result_text.split("```json")[1].split("```")[0].strip()
+    elif "```" in result_text:
+        result_text = result_text.split("```")[1].split("```")[0].strip()
+
+    try:
+        scan_results = json.loads(result_text)
+        relevant = sum(1 for r in scan_results if r.get("is_relevant", False))
+        print(f"✅ Scan complete! {relevant}/{len(scan_results)} circulars relevant to company.")
+        return scan_results
+    except json.JSONDecodeError:
+        print("⚠️ Could not parse scan results")
+        return [{"circular_index": i, "title": c["title"], "is_relevant": True,
+                 "relevance_reason": "Manual review needed", "impact_level": "Medium",
+                 "urgency": "This Quarter"} for i, c in enumerate(circulars)]
 
 
 # TEST

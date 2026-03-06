@@ -143,9 +143,26 @@ def _scrape_rbi_live():
     return circulars if len(circulars) >= 3 else None
 
 
+def _get_circular_summary(url):
+    """Get the summary from our verified data for a given URL."""
+    for c in LATEST_RBI_CIRCULARS:
+        if c["url"] == url:
+            return (
+                f"RBI Circular: {c['title']}\n"
+                f"Date: {c['date']}\n"
+                f"Category: {c['category']}\n\n"
+                f"{c['summary']}\n\n"
+                f"This circular falls under the regulatory domain of {c['category']} "
+                f"and may require compliance updates for affected financial institutions."
+            )
+    return None
+
+
 def fetch_circular_text(url):
     """Fetch the full text of a specific RBI circular."""
     print(f"📄 Fetching circular content from RBI...")
+
+    scraped_text = None
 
     try:
         response = requests.get(url, headers=HEADERS, timeout=15)
@@ -164,25 +181,28 @@ def fetch_circular_text(url):
             content = soup.find("body")
 
         if content:
-            # Remove scripts and styles
             for tag in content.find_all(["script", "style", "nav", "header", "footer"]):
                 tag.decompose()
 
             text = content.get_text(separator="\n", strip=True)
-            lines = [line.strip() for line in text.split("\n") if line.strip() and len(line.strip()) > 2]
-            clean_text = "\n".join(lines)
-            print(f"✅ Fetched {len(clean_text)} characters")
-            return clean_text[:5000]
-
-        return "Could not extract content from this circular."
+            lines = [line.strip() for line in text.split("\n") if line.strip() and len(line.strip()) > 5]
+            scraped_text = "\n".join(lines)
 
     except Exception as e:
-        print(f"⚠️ Fetch error: {e}")
-        # Return the summary from our data as fallback
-        for c in LATEST_RBI_CIRCULARS:
-            if c["url"] == url:
-                return f"{c['title']}\n\n{c['summary']}"
-        return f"Error fetching circular: {str(e)}"
+        print(f"⚠️ Live fetch error: {e}")
+
+    # Use scraped content if it's substantial enough
+    if scraped_text and len(scraped_text) > 200:
+        print(f"✅ Fetched {len(scraped_text)} characters from RBI website")
+        return scraped_text[:5000]
+
+    # Fallback: use our verified summary data
+    summary = _get_circular_summary(url)
+    if summary:
+        print(f"✅ Using verified circular data ({len(summary)} characters)")
+        return summary
+
+    return "Circular content unavailable. Please upload the circular PDF for detailed analysis."
 
 
 # TEST

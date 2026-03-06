@@ -4,6 +4,7 @@ from groq import Groq
 from dotenv import load_dotenv
 import os
 import json
+import re
 
 load_dotenv()
 groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
@@ -15,136 +16,137 @@ HEADERS = {
 }
 
 
-def search_company(company_name):
-    """Search for a company and find its website URL."""
-    print(f"🔍 Searching for '{company_name}'...")
+def find_company_website(company_name):
+    """Use AI to determine the correct website URL for an Indian company."""
+    print(f"🔍 Finding real website for '{company_name}'...")
 
-    # Try common fintech/NBFC website patterns
-    search_urls = [
-        f"https://www.google.com/search?q={company_name}+fintech+india+site",
-    ]
+    response = groq_client.chat.completions.create(
+        model="llama-3.1-8b-instant",
+        messages=[{
+            "role": "user",
+            "content": f"""What is the official website URL of the Indian company "{company_name}"?
 
-    # For known companies, return direct URLs
-    known_companies = {
-        "paytm": "https://paytm.com",
-        "phonepe": "https://www.phonepe.com",
-        "razorpay": "https://razorpay.com",
-        "cred": "https://cred.club",
-        "groww": "https://groww.in",
-        "zerodha": "https://zerodha.com",
-        "bajaj finserv": "https://www.bajajfinserv.in",
-        "hdfc bank": "https://www.hdfcbank.com",
-        "icici bank": "https://www.icicibank.com",
-        "sbi": "https://www.sbi.co.in",
-        "axis bank": "https://www.axisbank.com",
-        "kotak mahindra": "https://www.kotak.com",
-        "muthoot finance": "https://www.muthootfinance.com",
-        "bajaj finance": "https://www.bajajfinserv.in",
-        "mobikwik": "https://www.mobikwik.com",
-        "slice": "https://www.sliceit.com",
-        "jupiter": "https://jupiter.money",
-        "fi money": "https://fi.money",
-        "niyo": "https://www.goniyo.com",
-        "lendingkart": "https://www.lendingkart.com",
-        "zestmoney": "https://www.zestmoney.in",
-        "rupeek": "https://www.rupeek.com",
-        "navi": "https://navi.com",
-        "policybazaar": "https://www.policybazaar.com",
-    }
+If it is a bank, NBFC, fintech, or financial services company in India, return the exact official website URL.
 
-    name_lower = company_name.lower().strip()
-    for key, url in known_companies.items():
-        if key in name_lower or name_lower in key:
-            print(f"✅ Found: {url}")
-            return url
+Return ONLY the URL, nothing else. Example: https://www.paytm.com
+If you don't know the exact URL, return your best guess of the official domain.
 
-    # Try constructing URL from company name
-    clean_name = company_name.lower().replace(" ", "").replace(".", "")
-    guessed_url = f"https://www.{clean_name}.com"
-    print(f"🌐 Trying: {guessed_url}")
-    return guessed_url
+Company: {company_name}
+URL:"""
+        }],
+        temperature=0.1,
+        max_tokens=100
+    )
+
+    url = response.choices[0].message.content.strip()
+
+    # Clean up — extract URL from response
+    url_match = re.search(r'https?://[^\s<>"\']+', url)
+    if url_match:
+        url = url_match.group(0).rstrip("/.,;:)")
+
+    # Ensure it starts with https://
+    if not url.startswith("http"):
+        url = "https://" + url
+
+    print(f"✅ Found: {url}")
+    return url
 
 
 def scrape_company_website(url):
-    """Scrape company website to extract text content."""
+    """Scrape multiple pages of a company website for real content."""
     print(f"🌐 Scraping {url}...")
-
     all_text = ""
 
-    # Pages to scrape
-    pages = [
-        url,
-        url.rstrip("/") + "/about",
-        url.rstrip("/") + "/about-us",
-        url.rstrip("/") + "/products",
-        url.rstrip("/") + "/services",
+    # Key pages to try
+    base = url.rstrip("/")
+    pages_to_try = [
+        base,
+        base + "/about",
+        base + "/about-us",
+        base + "/about/about-us",
+        base + "/products",
+        base + "/services",
+        base + "/what-we-do",
+        base + "/our-products",
+        base + "/company",
     ]
 
-    for page_url in pages:
+    scraped_count = 0
+    for page_url in pages_to_try:
         try:
-            response = requests.get(page_url, headers=HEADERS, timeout=10, allow_redirects=True)
-            if response.status_code == 200:
+            response = requests.get(page_url, headers=HEADERS, timeout=8, allow_redirects=True)
+            if response.status_code == 200 and "text/html" in response.headers.get("Content-Type", ""):
                 soup = BeautifulSoup(response.text, "html.parser")
 
-                # Remove scripts, styles, nav, footer
-                for tag in soup.find_all(["script", "style", "nav", "footer", "header", "noscript"]):
+                # Remove non-content elements
+                for tag in soup.find_all(["script", "style", "nav", "footer", "header",
+                                          "noscript", "iframe", "svg", "form"]):
                     tag.decompose()
 
-                text = soup.get_text(separator=" ", strip=True)
+                # Get text from meaningful elements
+                text_parts = []
+                for element in soup.find_all(["p", "h1", "h2", "h3", "h4", "li", "td", "span", "div"]):
+                    txt = element.get_text(strip=True)
+                    if txt and len(txt) > 15 and not txt.startswith("{") and "cookie" not in txt.lower():
+                        text_parts.append(txt)
 
-                # Clean up
-                lines = [line.strip() for line in text.split("\n") if line.strip() and len(line.strip()) > 10]
-                page_text = " ".join(lines)
+                page_text = "\n".join(list(dict.fromkeys(text_parts)))  # Remove duplicates
 
-                if page_text:
-                    all_text += f"\n[PAGE: {page_url}]\n{page_text[:3000]}\n"
-                    print(f"  ✅ Scraped: {page_url} ({len(page_text)} chars)")
-        except Exception as e:
-            print(f"  ⚠️ Skipped: {page_url} ({e})")
+                if page_text and len(page_text) > 100:
+                    all_text += f"\n--- PAGE: {page_url} ---\n{page_text[:3000]}\n"
+                    scraped_count += 1
+                    print(f"  ✅ {page_url} ({len(page_text)} chars)")
+
+                    if scraped_count >= 3:  # Enough pages
+                        break
+        except Exception:
             continue
 
-    if not all_text:
-        print("⚠️ Could not scrape website, will use company name for AI analysis")
-        all_text = f"Company: {url}"
+    if not all_text or len(all_text) < 200:
+        print(f"⚠️ Limited content from website, AI will use company name for analysis")
+        all_text = f"Company name: {url}. Could not scrape detailed website content."
 
-    return all_text[:8000]
+    return all_text[:10000]
 
 
 def build_compliance_profile(company_name, website_text):
-    """Use Groq AI to build a structured compliance profile from website content."""
-    print("🧠 Building compliance profile with AI...")
+    """Use Groq AI to analyze real website content and build a structured compliance profile."""
+    print("🧠 Analyzing company with AI...")
 
     response = groq_client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
+        model="llama-3.1-8b-instant",
         messages=[{
             "role": "user",
-            "content": f"""You are an RBI regulatory compliance expert. Analyze this company's website content and build a compliance profile.
+            "content": f"""You are an RBI regulatory compliance expert. Analyze this company's REAL website content and build an accurate compliance profile based on what they ACTUALLY do.
 
 Company Name: {company_name}
-Website Content:
-{website_text[:6000]}
 
-Return ONLY a valid JSON object (no extra text, no markdown) with this exact structure:
+Website Content (scraped from their real website):
+{website_text[:7000]}
+
+Based on the ACTUAL content from their website, return ONLY a valid JSON object (no extra text, no markdown):
 {{
     "company_name": "{company_name}",
-    "company_type": "one of: Bank / NBFC / Fintech / Payment Aggregator / Microfinance / Insurance / Broker / Other",
-    "rbi_registration": "type of RBI registration likely held (e.g., NBFC-ND-SI, PA License, Banking License, PPI License)",
-    "services": ["list", "of", "specific", "services", "offered"],
-    "regulatory_domains": ["list of RBI regulatory areas applicable, e.g., KYC/AML, Digital Lending, PPI, UPI, Data Localization, NBFC Regulations"],
-    "applicable_rbi_guidelines": ["list of specific RBI Master Directions/Circulars applicable"],
-    "risk_areas": ["list of key compliance risk areas"],
-    "data_handling": "description of likely data handling practices (payments data, KYC data, etc.)",
-    "compliance_summary": "2-3 sentence summary of the company's compliance obligations"
+    "company_type": "one of: Commercial Bank / Small Finance Bank / NBFC / NBFC-MFI / Fintech / Payment Aggregator / Payment Bank / Insurance / Broker / Wallet Operator / Digital Lender / Other",
+    "rbi_registration": "the likely type of RBI registration they hold based on their services",
+    "services": ["list every specific product/service you found on their website"],
+    "regulatory_domains": ["list ALL RBI regulatory areas applicable based on their actual services"],
+    "applicable_rbi_guidelines": ["list specific RBI Master Directions and Circulars that apply to this company based on their services"],
+    "risk_areas": ["list specific compliance risk areas for this company"],
+    "data_handling": "describe what kind of customer data they likely handle based on their services",
+    "compliance_summary": "3-4 sentence summary of this company's regulatory obligations based on what they actually do"
 }}
 
-Be specific and practical. Base your analysis on the actual website content. Return ONLY the JSON."""
+IMPORTANT: Base everything on the ACTUAL website content. Do NOT give generic answers. Each company should have different services, risks, and applicable regulations based on what they really do.
+
+Return ONLY the JSON."""
         }],
-        temperature=0.3
+        temperature=0.2
     )
 
     result_text = response.choices[0].message.content.strip()
 
-    # Clean up response — extract JSON
     if "```json" in result_text:
         result_text = result_text.split("```json")[1].split("```")[0].strip()
     elif "```" in result_text:
@@ -152,36 +154,36 @@ Be specific and practical. Base your analysis on the actual website content. Ret
 
     try:
         profile = json.loads(result_text)
-        print("✅ Compliance profile built!")
+        print(f"✅ Profile built for {profile.get('company_name', company_name)}!")
         return profile
     except json.JSONDecodeError:
-        print("⚠️ Parsing AI response, building basic profile...")
+        print("⚠️ Parsing error, building basic profile")
         return {
             "company_name": company_name,
             "company_type": "Fintech",
-            "rbi_registration": "Unknown",
-            "services": ["Digital payments", "Financial services"],
-            "regulatory_domains": ["KYC/AML", "Digital Lending", "Data Privacy"],
+            "rbi_registration": "Unknown — manual verification needed",
+            "services": ["Financial services"],
+            "regulatory_domains": ["KYC/AML", "Data Privacy"],
             "applicable_rbi_guidelines": ["RBI KYC Master Direction 2016"],
-            "risk_areas": ["KYC compliance", "Data localization"],
-            "data_handling": "Handles customer financial and personal data",
+            "risk_areas": ["Regulatory compliance"],
+            "data_handling": "Handles customer financial data",
             "compliance_summary": result_text[:300]
         }
 
 
 def profile_company(company_name):
-    """Full pipeline: search → scrape → build profile."""
+    """Full autonomous pipeline: find website → scrape → build profile."""
     print(f"\n{'='*60}")
     print(f"🏢 Building Compliance Profile: {company_name}")
     print(f"{'='*60}")
 
-    # Step 1: Find website
-    url = search_company(company_name)
+    # Step 1: Find real website via AI
+    url = find_company_website(company_name)
 
-    # Step 2: Scrape website
+    # Step 2: Scrape real website content
     website_text = scrape_company_website(url)
 
-    # Step 3: Build profile with AI
+    # Step 3: Build profile from real content
     profile = build_compliance_profile(company_name, website_text)
     profile["website_url"] = url
 
@@ -190,7 +192,9 @@ def profile_company(company_name):
 
 # TEST
 if __name__ == "__main__":
-    profile = profile_company("Paytm")
+    import sys
+    name = sys.argv[1] if len(sys.argv) > 1 else "Razorpay"
+    profile = profile_company(name)
     print("\n" + "="*60)
     print("📋 COMPLIANCE PROFILE:")
     print("="*60)
